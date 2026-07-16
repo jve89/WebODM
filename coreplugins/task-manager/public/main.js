@@ -100,7 +100,7 @@
         this.$table.toggle(!loading);
     };
 
-    TaskManager.prototype._rowHtml = function(project, task) {
+    TaskManager.prototype._rowHtml = function(project, task, ownerName) {
         var perms = project.permissions || [];
         var canDelete = perms.indexOf("delete") !== -1;
         var isCompacted = !!task.compacted;
@@ -125,6 +125,7 @@
 
         return '<tr>' +
             '<td class="tm-project-name">' + escapeHtml(project.name) + '</td>' +
+            '<td>' + escapeHtml(ownerName || "") + '</td>' +
             '<td>' + escapeHtml(task.name || task.id) + '</td>' +
             '<td class="tm-status-' + st.cls + '">' + escapeHtml(st.label) + '</td>' +
             '<td>' + (task.images_count || 0) + '</td>' +
@@ -133,10 +134,11 @@
             '</tr>';
     };
 
-    TaskManager.prototype._render = function(entries) {
+    TaskManager.prototype._render = function(entries, owners) {
         var self = this;
         var html = "";
         var total = 0;
+        owners = owners || {};
 
         entries.sort(function(a, b) {
             return (a.project.name || "").localeCompare(b.project.name || "");
@@ -148,12 +150,12 @@
             });
             entry.tasks.forEach(function(task) {
                 total += task.size || 0;
-                html += self._rowHtml(entry.project, task);
+                html += self._rowHtml(entry.project, task, owners[entry.project.id]);
             });
         });
 
         if (html === "") {
-            html = '<tr><td colspan="6" class="text-center text-muted">No tasks found.</td></tr>';
+            html = '<tr><td colspan="7" class="text-center text-muted">No tasks found.</td></tr>';
         }
 
         this.$tbody.html(html);
@@ -166,6 +168,11 @@
         this._setLoading(true);
         this.$error.hide();
 
+        var owners = {};
+        var ownersRequest = $.getJSON("owners").done(function(res) {
+            owners = res || {};
+        });
+
         $.getJSON("/api/projects/?ordering=name").done(function(projects) {
             var entries = [];
             var requests = projects.map(function(project) {
@@ -173,14 +180,15 @@
                     entries.push({project: project, tasks: tasks});
                 });
             });
+            requests.push(ownersRequest);
 
             $.when.apply($, requests).always(function() {
-                self._render(entries);
+                self._render(entries, owners);
                 self._setLoading(false);
             });
 
             if (requests.length === 0) {
-                self._render(entries);
+                self._render(entries, owners);
                 self._setLoading(false);
             }
         }).fail(function() {

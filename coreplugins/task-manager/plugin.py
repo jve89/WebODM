@@ -1,7 +1,11 @@
 from app.plugins import PluginBase, Menu, MountPoint
 from django.shortcuts import render
+from django.http import JsonResponse
 from django.contrib.auth.decorators import login_required
 from django.utils.translation import gettext as _
+from guardian.shortcuts import get_objects_for_user
+
+from app.models import Project
 
 
 class Plugin(PluginBase):
@@ -15,8 +19,18 @@ class Plugin(PluginBase):
                 'title': _("Task Manager")
             })
 
+        @login_required
+        def owners_view(request):
+            projects = get_objects_for_user(request.user, 'view_project', Project,
+                                             accept_global_perms=False).select_related('owner')
+            owners = {}
+            for project in projects:
+                owners[project.id] = project.owner.get_full_name() or project.owner.username
+            return JsonResponse(owners)
+
         return [
             MountPoint('$', index_view),
+            MountPoint('owners$', owners_view),
             # more mount points here ...
         ]
 
