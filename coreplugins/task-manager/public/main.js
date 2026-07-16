@@ -11,11 +11,11 @@
         50: {label: "Canceled", cls: "CANCELED"}
     };
 
-    function statusInfo(task) {
-        if (task.status === null || task.status === undefined) {
+    function statusInfo(status) {
+        if (status === null || status === undefined) {
             return {label: "Uploading", cls: "QUEUED"};
         }
-        return STATUS_LABELS[task.status] || {label: "Unknown", cls: ""};
+        return STATUS_LABELS[status] || {label: "Unknown", cls: ""};
     }
 
     function formatSize(mb) {
@@ -36,6 +36,13 @@
         this.$loading = root.find("#tm-loading");
         this.$error = root.find("#tm-error");
         this.$total = root.find("#tm-total-value");
+        this.$pagination = root.find("#tm-pagination");
+        this.$pageInfo = root.find("#tm-page-info");
+        this.$prevPage = root.find("#tm-prev-page");
+        this.$nextPage = root.find("#tm-next-page");
+
+        this.page = 1;
+        this.ordering = "project";
 
         this._bindEvents();
         this.load();
@@ -46,6 +53,33 @@
 
         this.$root.find("#tm-refresh").on("click", function() {
             self.load();
+        });
+
+        this.$root.find("thead").on("click", ".tm-sortable", function() {
+            var field = $(this).data("field");
+            if (self.ordering === field) {
+                self.ordering = "-" + field;
+            } else if (self.ordering === "-" + field) {
+                self.ordering = field;
+            } else {
+                self.ordering = field;
+            }
+            self.page = 1;
+            self.load();
+        });
+
+        this.$prevPage.on("click", function() {
+            if (self.page > 1) {
+                self.page -= 1;
+                self.load();
+            }
+        });
+
+        this.$nextPage.on("click", function() {
+            if (self.page < (self.numPages || 1)) {
+                self.page += 1;
+                self.load();
+            }
         });
 
         this.$tbody.on("click", ".tm-compact", function() {
@@ -100,12 +134,11 @@
         this.$table.toggle(!loading);
     };
 
-    TaskManager.prototype._rowHtml = function(project, task, ownerName) {
-        var perms = project.permissions || [];
-        var canDelete = perms.indexOf("delete") !== -1;
-        var isCompacted = !!task.compacted;
-        var canCompact = canDelete && task.status === 40 && !isCompacted;
-        var st = statusInfo(task);
+    TaskManager.prototype._rowHtml = function(row) {
+        var canDelete = !!row.can_delete;
+        var isCompacted = !!row.compacted;
+        var canCompact = !!row.can_compact;
+        var st = statusInfo(row.status);
 
         var actions = "";
         if (isCompacted) {
@@ -113,45 +146,62 @@
                 'title="Compacted"><i class="fa fa-check"></i> Compacted</button>';
         } else if (canCompact) {
             actions += '<button type="button" class="btn btn-xs btn-default tm-compact" ' +
-                'data-project="' + project.id + '" data-task="' + task.id + '" ' +
+                'data-project="' + row.project_id + '" data-task="' + row.task_id + '" ' +
                 'title="Compact"><i class="fa fa-database"></i> Compact</button>';
         }
         if (canDelete) {
             actions += '<button type="button" class="btn btn-xs btn-danger tm-delete" ' +
-                'data-project="' + project.id + '" data-task="' + task.id + '" ' +
+                'data-project="' + row.project_id + '" data-task="' + row.task_id + '" ' +
                 'title="Delete"><i class="fa fa-trash"></i> Delete</button>';
         }
         if (actions === "") actions = '<span class="text-muted">&mdash;</span>';
 
         return '<tr>' +
-            '<td class="tm-project-name">' + escapeHtml(project.name) + '</td>' +
-            '<td>' + escapeHtml(ownerName || "") + '</td>' +
-            '<td>' + escapeHtml(task.name || task.id) + '</td>' +
+            '<td class="tm-project-name">' + escapeHtml(row.project_name) + '</td>' +
+            '<td>' + escapeHtml(row.owner_name) + '</td>' +
+            '<td>' + escapeHtml(row.task_name || row.task_id) + '</td>' +
             '<td class="tm-status-' + st.cls + '">' + escapeHtml(st.label) + '</td>' +
-            '<td>' + (task.images_count || 0) + '</td>' +
-            '<td>' + formatSize(task.size) + '</td>' +
+            '<td>' + (row.images_count || 0) + '</td>' +
+            '<td>' + formatSize(row.size) + '</td>' +
             '<td class="tm-actions">' + actions + '</td>' +
             '</tr>';
     };
 
-    TaskManager.prototype._render = function(entries, owners) {
+    TaskManager.prototype._updateSortIndicators = function() {
+        var self = this;
+        this.$root.find("thead .tm-sortable").each(function() {
+            var $th = $(this);
+            var field = $th.data("field");
+            var $icon = $th.find("i");
+            $icon.removeClass("fa-sort fa-sort-up fa-sort-down");
+            if (self.ordering === field) {
+                $icon.addClass("fa-sort-up");
+            } else if (self.ordering === "-" + field) {
+                $icon.addClass("fa-sort-down");
+            } else {
+                $icon.addClass("fa-sort");
+            }
+        });
+    };
+
+    TaskManager.prototype._updatePagination = function(res) {
+        this.numPages = res.num_pages || 1;
+
+        var start = res.count === 0 ? 0 : (res.page - 1) * res.page_size + 1;
+        var end = Math.min(res.page * res.page_size, res.count);
+        this.$pageInfo.text(start + "\u2013" + end + " of " + res.count);
+
+        this.$prevPage.prop("disabled", res.page <= 1);
+        this.$nextPage.prop("disabled", res.page >= res.num_pages);
+        this.$pagination.toggle(res.count > 0);
+    };
+
+    TaskManager.prototype._render = function(res) {
         var self = this;
         var html = "";
-        var total = 0;
-        owners = owners || {};
 
-        entries.sort(function(a, b) {
-            return (a.project.name || "").localeCompare(b.project.name || "");
-        });
-
-        entries.forEach(function(entry) {
-            entry.tasks.sort(function(a, b) {
-                return new Date(b.created_at) - new Date(a.created_at);
-            });
-            entry.tasks.forEach(function(task) {
-                total += task.size || 0;
-                html += self._rowHtml(entry.project, task, owners[entry.project.id]);
-            });
+        (res.results || []).forEach(function(row) {
+            html += self._rowHtml(row);
         });
 
         if (html === "") {
@@ -159,7 +209,9 @@
         }
 
         this.$tbody.html(html);
-        this.$total.text(formatSize(total));
+        this.$total.text(formatSize(res.total_size));
+        this._updateSortIndicators();
+        this._updatePagination(res);
     };
 
     TaskManager.prototype.load = function() {
@@ -168,31 +220,12 @@
         this._setLoading(true);
         this.$error.hide();
 
-        var owners = {};
-        var ownersRequest = $.getJSON("owners").done(function(res) {
-            owners = res || {};
-        });
-
-        $.getJSON("/api/projects/?ordering=name").done(function(projects) {
-            var entries = [];
-            var requests = projects.map(function(project) {
-                return $.getJSON("/api/projects/" + project.id + "/tasks/").done(function(tasks) {
-                    entries.push({project: project, tasks: tasks});
-                });
-            });
-            requests.push(ownersRequest);
-
-            $.when.apply($, requests).always(function() {
-                self._render(entries, owners);
-                self._setLoading(false);
-            });
-
-            if (requests.length === 0) {
-                self._render(entries, owners);
-                self._setLoading(false);
-            }
+        $.getJSON("tasks", {page: this.page, ordering: this.ordering}).done(function(res) {
+            self.page = res.page || 1;
+            self._render(res);
+            self._setLoading(false);
         }).fail(function() {
-            self.$error.text("Unable to retrieve the list of projects.").show();
+            self.$error.text("Unable to retrieve the list of tasks.").show();
             self._setLoading(false);
         });
     };
